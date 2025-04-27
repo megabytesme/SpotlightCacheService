@@ -1,0 +1,18 @@
+# .dockerignore
+
+.git/
+.gitignore
+Dockerfile
+docker-compose*
+
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln.docstates
+
+**/bin/
+**/obj/
+
+SpotlightCacheService/cache/
+SpotlightCacheService/Properties/launchSettings.json
