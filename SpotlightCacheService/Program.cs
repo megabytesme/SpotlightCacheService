@@ -4,17 +4,20 @@ using SpotlightCacheService.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpClient("SpotlightClient", client => { });
-
 builder.Services.AddSingleton<SpotlightCacheService.Services.SpotlightCacheService>();
 builder.Services.AddHostedService<CacheUpdateService>();
 
-var frontendOrigin = builder.Configuration["FrontendOrigin"] ?? "http://127.0.0.1:3000";
+var AllowAnyOriginPolicy = "_allowAnyOriginPolicy";
+
 builder.Services.AddCors(options =>
 {
-    options.AddDefaultPolicy(policy =>
-    {
-        policy.WithOrigins(frontendOrigin).AllowAnyHeader().AllowAnyMethod();
-    });
+    options.AddPolicy(name: AllowAnyOriginPolicy,
+                      policy =>
+                      {
+                          policy.AllowAnyOrigin()
+                                .AllowAnyHeader()
+                                .AllowAnyMethod();
+                      });
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -31,7 +34,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseCors();
+app.UseCors(AllowAnyOriginPolicy);
 
 var cacheBasePath =
     builder.Configuration.GetValue<string>("SpotlightSettings:CacheBasePath") ?? "cache";
