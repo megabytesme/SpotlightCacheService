@@ -1,5 +1,8 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Processing;
 
 namespace SpotlightCacheService.Services;
 
@@ -11,6 +14,7 @@ public class SpotlightCacheService
     private readonly string _imageCachePath;
     private readonly string _metadataCachePath;
     private readonly string _spotlightApiUrl;
+    private readonly int _compressionQuality;
     private List<CachedSpotlightImage> _cachedData = new();
     private static readonly SemaphoreSlim _cacheLock = new(1, 1);
 
@@ -24,6 +28,12 @@ public class SpotlightCacheService
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
+
+        _compressionQuality = _configuration.GetValue<int>(
+            "SpotlightSettings:CompressionQuality",
+            75
+        );
+        _logger.LogInformation("Image compression quality set to {Quality}", _compressionQuality);
 
         var cacheBasePath =
             _configuration.GetValue<string>("SpotlightSettings:CacheBasePath") ?? "cache";
@@ -120,11 +130,9 @@ public class SpotlightCacheService
         {
             var response = await httpClient.GetAsync(_spotlightApiUrl, cancellationToken);
             response.EnsureSuccessStatusCode();
-
             var batchResponse = await response.Content.ReadFromJsonAsync<BatchResponse>(
                 cancellationToken: cancellationToken
             );
-
             if (batchResponse?.Batchrsp?.Items == null || !batchResponse.Batchrsp.Items.Any())
             {
                 _logger.LogWarning("Received empty or invalid item list from Spotlight API.");
@@ -160,13 +168,25 @@ public class SpotlightCacheService
                     var landscapeLocalPath = Path.Combine(_imageCachePath, landscapeFilename);
                     var portraitLocalPath = Path.Combine(_imageCachePath, portraitFilename);
 
-                    await DownloadImageIfNotExistsAsync(
+                    var landscapeCompressedFilename = GetCompressedImageFilename(landscapeFilename);
+                    var portraitCompressedFilename = GetCompressedImageFilename(portraitFilename);
+
+                    var landscapeCompressedLocalPath = Path.Combine(
+                        _imageCachePath,
+                        landscapeCompressedFilename
+                    );
+                    var portraitCompressedLocalPath = Path.Combine(
+                        _imageCachePath,
+                        portraitCompressedFilename
+                    );
+
+                    bool landscapeDownloaded = await DownloadImageIfNotExistsAsync(
                         httpClient,
                         landscapeUrl,
                         landscapeLocalPath,
                         cancellationToken
                     );
-                    await DownloadImageIfNotExistsAsync(
+                    bool portraitDownloaded = await DownloadImageIfNotExistsAsync(
                         httpClient,
                         portraitUrl,
                         portraitLocalPath,
@@ -175,6 +195,26 @@ public class SpotlightCacheService
 
                     if (cancellationToken.IsCancellationRequested)
                         break;
+
+                    bool landscapeCompressed = false;
+                    bool portraitCompressed = false;
+
+                    if (File.Exists(landscapeLocalPath))
+                    {
+                        landscapeCompressed = await CompressImageAsync(
+                            landscapeLocalPath,
+                            landscapeCompressedLocalPath,
+                            cancellationToken
+                        );
+                    }
+                    if (File.Exists(portraitLocalPath))
+                    {
+                        portraitCompressed = await CompressImageAsync(
+                            portraitLocalPath,
+                            portraitCompressedLocalPath,
+                            cancellationToken
+                        );
+                    }
 
                     if (File.Exists(landscapeLocalPath) && File.Exists(portraitLocalPath))
                     {
@@ -199,11 +239,27 @@ public class SpotlightCacheService
                             {
                                 LandscapeUrl = landscapeUrl,
                                 PortraitUrl = portraitUrl,
+
                                 LandscapePath = landscapeFilename,
                                 PortraitPath = portraitFilename,
+
+                                LandscapePathCompressed = landscapeCompressed
+                                    ? landscapeCompressedFilename
+                                    : null,
+                                PortraitPathCompressed = portraitCompressed
+                                    ? portraitCompressedFilename
+                                    : null,
                                 Copyright = copyrightInfo,
                                 Title = ad?.Title,
                             }
+                        );
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Skipping item metadata for {LandUrl} / {PortUrl} as original file(s) not found after download attempt.",
+                            landscapeUrl,
+                            portraitUrl
                         );
                     }
                 }
@@ -226,7 +282,6 @@ public class SpotlightCacheService
             {
                 _cacheLock.Release();
             }
-
             await SaveCacheToDiskAsync();
             _logger.LogInformation(
                 "Spotlight data fetch and cache update complete. Cached {Count} items.",
@@ -237,9 +292,85 @@ public class SpotlightCacheService
         {
             _logger.LogError(httpEx, "HTTP error fetching Spotlight data.");
         }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Spotlight data fetch cancelled.");
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error during Spotlight data fetch.");
+        }
+    }
+
+    private string GetCompressedImageFilename(string originalFilename)
+    {
+        var nameWithoutExtension = Path.GetFileNameWithoutExtension(originalFilename);
+        var extension = Path.GetExtension(originalFilename);
+        return $"{nameWithoutExtension}_q{_compressionQuality}{extension}";
+    }
+
+    private async Task<bool> CompressImageAsync(
+        string inputPath,
+        string outputPath,
+        CancellationToken cancellationToken
+    )
+    {
+        if (File.Exists(outputPath))
+        {
+            _logger.LogDebug(
+                "Compressed image {OutputPath} already exists. Skipping compression.",
+                Path.GetFileName(outputPath)
+            );
+            return true;
+        }
+
+        _logger.LogInformation(
+            "Compressing {Input} to {Output} (Quality: {Quality})...",
+            Path.GetFileName(inputPath),
+            Path.GetFileName(outputPath),
+            _compressionQuality
+        );
+
+        try
+        {
+            using var image = await Image.LoadAsync(inputPath, cancellationToken);
+
+            var encoder = new JpegEncoder { Quality = _compressionQuality };
+
+            await image.SaveAsJpegAsync(outputPath, encoder, cancellationToken);
+
+            _logger.LogDebug(
+                "Successfully compressed {Input} to {Output}",
+                Path.GetFileName(inputPath),
+                Path.GetFileName(outputPath)
+            );
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to compress image {Input} to {Output}",
+                Path.GetFileName(inputPath),
+                Path.GetFileName(outputPath)
+            );
+
+            if (File.Exists(outputPath))
+            {
+                try
+                {
+                    File.Delete(outputPath);
+                }
+                catch (Exception deleteEx)
+                {
+                    _logger.LogWarning(
+                        deleteEx,
+                        "Failed to delete partially compressed file {Output}",
+                        outputPath
+                    );
+                }
+            }
+            return false;
         }
     }
 
@@ -258,7 +389,7 @@ public class SpotlightCacheService
         }
     }
 
-    private async Task DownloadImageIfNotExistsAsync(
+    private async Task<bool> DownloadImageIfNotExistsAsync(
         HttpClient client,
         string url,
         string localPath,
@@ -267,9 +398,10 @@ public class SpotlightCacheService
     {
         if (File.Exists(localPath))
         {
-            return;
+            return true;
         }
 
+        bool success = false;
         try
         {
             _logger.LogInformation(
@@ -288,14 +420,24 @@ public class SpotlightCacheService
             response.EnsureSuccessStatusCode();
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var fileStream = new FileStream(
-                localPath,
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None
-            );
-            await stream.CopyToAsync(fileStream, cancellationToken);
+
+            string tempPath = localPath + ".tmp";
+            using (
+                var fileStream = new FileStream(
+                    tempPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None
+                )
+            )
+            {
+                await stream.CopyToAsync(fileStream, cancellationToken);
+            }
+
+            File.Move(tempPath, localPath, true);
+
             _logger.LogDebug("Successfully downloaded {FileName}", Path.GetFileName(localPath));
+            success = true;
         }
         catch (HttpRequestException httpEx)
         {
@@ -305,27 +447,43 @@ public class SpotlightCacheService
                 url,
                 httpEx.StatusCode
             );
-            if (File.Exists(localPath))
-                try
-                {
-                    File.Delete(localPath);
-                }
-                catch { }
+            success = false;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Download cancelled for {Url}", url);
+            success = false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to download image {Url}", url);
-            if (File.Exists(localPath))
+            success = false;
+        }
+        finally
+        {
+            client.DefaultRequestHeaders.Accept.Clear();
+
+            string tempPath = localPath + ".tmp";
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch { }
+            }
+
+            if (!success && File.Exists(localPath))
+            {
                 try
                 {
                     File.Delete(localPath);
                 }
                 catch { }
+            }
         }
-        finally
-        {
-            client.DefaultRequestHeaders.Accept.Clear();
-        }
+
+        return success;
     }
 }
 

@@ -55,6 +55,8 @@ public class CachedSpotlightImage
     public string? PortraitUrl { get; set; }
     public string? LandscapePath { get; set; }
     public string? PortraitPath { get; set; }
+    public string? LandscapePathCompressed { get; set; }
+    public string? PortraitPathCompressed { get; set; }
     public string? Copyright { get; set; }
     public string? Title { get; set; }
     public DateTime CachedAt { get; set; } = DateTime.UtcNow;
