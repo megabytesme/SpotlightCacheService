@@ -11,13 +11,13 @@ var AllowAnyOriginPolicy = "_allowAnyOriginPolicy";
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy(name: AllowAnyOriginPolicy,
-                      policy =>
-                      {
-                          policy.AllowAnyOrigin()
-                                .AllowAnyHeader()
-                                .AllowAnyMethod();
-                      });
+    options.AddPolicy(
+        name: AllowAnyOriginPolicy,
+        policy =>
+        {
+            policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        }
+    );
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -47,7 +47,7 @@ app.UseStaticFiles(
     new StaticFileOptions
     {
         FileProvider = new PhysicalFileProvider(imageCachePath),
-        RequestPath = "/cached-images",
+        RequestPath = "/api/cached-images",
     }
 );
 
