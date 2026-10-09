@@ -93,16 +93,20 @@ public class SpotlightCacheService
         }
     }
 
-    private async Task<bool> SaveCacheToDiskAsync(CancellationToken cancellationToken)
+    private async Task<bool> SaveCacheToDiskAsync(
+        List<CachedSpotlightImage> cachedData,
+        CancellationToken cancellationToken
+    )
     {
         await _cacheLock.WaitAsync(cancellationToken);
         var temporaryPath = _metadataCachePath + ".tmp";
         try
         {
             var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(_cachedData, options);
+            var json = JsonSerializer.Serialize(cachedData, options);
             await File.WriteAllTextAsync(temporaryPath, json, cancellationToken);
             File.Move(temporaryPath, _metadataCachePath, overwrite: true);
+            _cachedData = cachedData;
             _logger.LogInformation("Saved {Count} items to spotlight cache.", _cachedData.Count);
             return true;
         }
@@ -357,17 +361,9 @@ public class SpotlightCacheService
                 return;
             }
 
-            await _cacheLock.WaitAsync(cancellationToken);
-            try
-            {
-                _cachedData = newImageData;
-            }
-            finally
-            {
-                _cacheLock.Release();
-            }
-            if (await SaveCacheToDiskAsync(cancellationToken))
-                PurgeUnusedImages(newImageData);
+            if (!await SaveCacheToDiskAsync(newImageData, cancellationToken))
+                return;
+            PurgeUnusedImages(newImageData);
             _logger.LogInformation(
                 "Spotlight data fetch and cache update complete. Cached {Count} items.",
                 newImageData.Count

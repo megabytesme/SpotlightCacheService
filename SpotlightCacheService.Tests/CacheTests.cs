@@ -75,6 +75,7 @@ public class CacheTests
 
         Assert.True(File.Exists(oldImage));
         Assert.False(File.Exists(cache.MetadataPath + ".tmp"));
+        Assert.Equal("existing-image", Assert.Single(service.GetCachedData()).Id);
     }
 
     [Fact]
