@@ -11,6 +11,7 @@ I use this for the Spotlight backgrounds on [my website](https://megabytesme.ddn
 - **Image Information:** Returns the title, copyright, original URLs, cached filenames and cache date for each image.
 - **Automatic Updates:** Fetches the latest images on startup, then checks again at the configured interval.
 - **Persistent Cache:** Loads the existing cache on startup. If a refresh fails or returns no usable images, the previous cache is kept.
+- **Automatic Cleanup:** Removes original and compressed images which are no longer listed in the cache JSON after a successful refresh.
 - **Docker Support:** Includes a Dockerfile using the .NET 10 SDK and ASP.NET Core runtime images.
 
 ## Build Guide
@@ -82,7 +83,7 @@ Settings are in `SpotlightCacheService/appsettings.json`, with Development overr
 
 Settings can also be overridden with environment variables, using two underscores in place of the colon. For example, `SpotlightSettings__UpdateIntervalHours=6` changes the refresh interval to six hours.
 
-Metadata is stored in `cache/data/spotlight_cache.json`, and images are stored in `cache/images`. The metadata lists the latest successful batch. Older downloaded images are kept on disk, and existing files are reused rather than downloaded or compressed again.
+Metadata is stored in `cache/data/spotlight_cache.json`, and images are stored in `cache/images`. The metadata lists the latest successful batch. After saving the new JSON, images which are no longer referenced are deleted automatically. Images which are still listed are kept and reused rather than downloaded or compressed again. Failed or empty refreshes keep the existing cache, and cleanup is skipped if the metadata cannot be saved.
 
 ## API Usage
 
@@ -108,7 +109,7 @@ CORS allows any origin, so the API can be called from a separate frontend. In pr
 dotnet test SpotlightCache.sln -c Release --maxcpucount
 ```
 
-Tests cover the existing cache and API response format, original and compressed image downloads, invalid and duplicate JSON, cancelled refreshes, and Development-only OpenAPI documentation. They use a local HTTP handler and temporary cache directories, so Microsoft's API is not needed to run them.
+Tests cover the existing cache and API response format, original and compressed image downloads, cache cleanup, invalid and duplicate JSON, cancelled refreshes, and Development-only OpenAPI documentation. They use a local HTTP handler and temporary cache directories, so Microsoft's API is not needed to run them.
 
 ## Contact
 

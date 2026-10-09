@@ -14,6 +14,69 @@ namespace SpotlightCacheService.Tests;
 
 public class CacheTests
 {
+    private const string ValidItem = """
+        {"ad":{"landscapeImage":{"asset":"https://spotlight.test/landscape.jpg"},
+        "portraitImage":{"asset":"https://spotlight.test/portrait.jpg"},"title":"New image"}}
+        """;
+
+    [Fact]
+    public async Task SuccessfulRefreshRemovesOnlyImagesMissingFromNewMetadata()
+    {
+        using var cache = new TestCache();
+        cache.Seed();
+        var service = cache.CreateService(TestCache.Batch(ValidItem));
+        var imagesPath = Path.Combine(cache.Path, "images");
+        await File.WriteAllTextAsync(Path.Combine(imagesPath, "existing.jpg"), "old original");
+        await File.WriteAllTextAsync(
+            Path.Combine(imagesPath, "existing_q35.jpg"),
+            "old compressed"
+        );
+        await File.WriteAllTextAsync(Path.Combine(imagesPath, "orphan.jpg"), "orphan");
+
+        await service.FetchAndCacheSpotlightDataAsync();
+
+        var current = Assert.Single(service.GetCachedData());
+        var expected = new[]
+        {
+            current.LandscapePath,
+            current.PortraitPath,
+            current.LandscapePathCompressed,
+            current.PortraitPathCompressed,
+        }
+            .Order()
+            .ToArray();
+        Assert.Equal(
+            expected,
+            Directory.GetFiles(imagesPath).Select(Path.GetFileName).Order().ToArray()
+        );
+        Assert.False(File.Exists(cache.MetadataPath + ".tmp"));
+        var firstRefresh = Directory
+            .GetFiles(imagesPath)
+            .ToDictionary(path => path, File.ReadAllBytes);
+
+        await service.FetchAndCacheSpotlightDataAsync();
+
+        foreach (var (path, contents) in firstRefresh)
+            Assert.Equal(contents, await File.ReadAllBytesAsync(path));
+    }
+
+    [Fact]
+    public async Task FailedMetadataSaveDoesNotPurgeImages()
+    {
+        using var cache = new TestCache();
+        cache.Seed();
+        var service = cache.CreateService(TestCache.Batch(ValidItem));
+        var oldImage = Path.Combine(cache.Path, "images", "existing.jpg");
+        await File.WriteAllTextAsync(oldImage, "old original");
+        File.Delete(cache.MetadataPath);
+        Directory.CreateDirectory(cache.MetadataPath);
+
+        await service.FetchAndCacheSpotlightDataAsync();
+
+        Assert.True(File.Exists(oldImage));
+        Assert.False(File.Exists(cache.MetadataPath + ".tmp"));
+    }
+
     [Fact]
     public async Task FetchDownloadsCompressesAndPersistsImagesWithUnknownUpstreamFields()
     {
@@ -64,11 +127,14 @@ public class CacheTests
         cache.Seed();
         var original = await File.ReadAllTextAsync(cache.MetadataPath);
         var service = cache.CreateService(batch);
+        var oldImage = Path.Combine(cache.Path, "images", "existing.jpg");
+        await File.WriteAllTextAsync(oldImage, "old original");
 
         await service.FetchAndCacheSpotlightDataAsync();
 
         Assert.Equal("existing-image", Assert.Single(service.GetCachedData()).Id);
         Assert.Equal(original, await File.ReadAllTextAsync(cache.MetadataPath));
+        Assert.True(File.Exists(oldImage));
     }
 
     [Fact]

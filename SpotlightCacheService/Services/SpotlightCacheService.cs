@@ -93,23 +93,84 @@ public class SpotlightCacheService
         }
     }
 
-    private async Task SaveCacheToDiskAsync()
+    private async Task<bool> SaveCacheToDiskAsync(CancellationToken cancellationToken)
     {
-        await _cacheLock.WaitAsync();
+        await _cacheLock.WaitAsync(cancellationToken);
+        var temporaryPath = _metadataCachePath + ".tmp";
         try
         {
             var options = new JsonSerializerOptions { WriteIndented = true };
             var json = JsonSerializer.Serialize(_cachedData, options);
-            await File.WriteAllTextAsync(_metadataCachePath, json);
+            await File.WriteAllTextAsync(temporaryPath, json, cancellationToken);
+            File.Move(temporaryPath, _metadataCachePath, overwrite: true);
             _logger.LogInformation("Saved {Count} items to spotlight cache.", _cachedData.Count);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error saving spotlight cache to disk.");
+            return false;
         }
         finally
         {
+            try
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Unable to delete temporary cache metadata.");
+            }
             _cacheLock.Release();
+        }
+    }
+
+    private void PurgeUnusedImages(List<CachedSpotlightImage> cachedData)
+    {
+        var referencedFiles = cachedData
+            .SelectMany(image =>
+                new[]
+                {
+                    image.LandscapePath,
+                    image.PortraitPath,
+                    image.LandscapePathCompressed,
+                    image.PortraitPathCompressed,
+                }
+            )
+            .Where(filename => !string.IsNullOrEmpty(filename))
+            .ToHashSet(
+                OperatingSystem.IsWindows()
+                    ? StringComparer.OrdinalIgnoreCase
+                    : StringComparer.Ordinal
+            );
+
+        var removed = 0;
+        try
+        {
+            foreach (var imagePath in Directory.EnumerateFiles(_imageCachePath))
+            {
+                if (referencedFiles.Contains(Path.GetFileName(imagePath)))
+                    continue;
+                try
+                {
+                    File.Delete(imagePath);
+                    removed++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Unable to remove unused cached image {Path}.",
+                        imagePath
+                    );
+                }
+            }
+            _logger.LogInformation("Removed {Count} unused cached images.", removed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unable to finish cleaning unused cached images.");
         }
     }
 
@@ -305,7 +366,8 @@ public class SpotlightCacheService
             {
                 _cacheLock.Release();
             }
-            await SaveCacheToDiskAsync();
+            if (await SaveCacheToDiskAsync(cancellationToken))
+                PurgeUnusedImages(newImageData);
             _logger.LogInformation(
                 "Spotlight data fetch and cache update complete. Cached {Count} items.",
                 newImageData.Count
