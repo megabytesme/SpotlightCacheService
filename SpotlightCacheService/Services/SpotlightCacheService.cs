@@ -1,13 +1,19 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace SpotlightCacheService.Services;
 
 public class SpotlightCacheService
 {
+    private static readonly JsonSerializerOptions BatchJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        AllowDuplicateProperties = false,
+    };
+    private static readonly JsonSerializerOptions ItemJsonOptions = new()
+    {
+        AllowDuplicateProperties = false,
+    };
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SpotlightCacheService> _logger;
@@ -128,9 +134,14 @@ public class SpotlightCacheService
 
         try
         {
-            var response = await httpClient.GetAsync(_spotlightApiUrl, cancellationToken);
+            using var response = await httpClient.GetAsync(
+                _spotlightApiUrl,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken
+            );
             response.EnsureSuccessStatusCode();
             var batchResponse = await response.Content.ReadFromJsonAsync<BatchResponse>(
+                BatchJsonOptions,
                 cancellationToken: cancellationToken
             );
             if (batchResponse?.Batchrsp?.Items == null || !batchResponse.Batchrsp.Items.Any())
@@ -148,7 +159,10 @@ public class SpotlightCacheService
 
                 try
                 {
-                    var innerItem = JsonSerializer.Deserialize<InnerItem>(itemContainer.Item);
+                    var innerItem = JsonSerializer.Deserialize<InnerItem>(
+                        itemContainer.Item,
+                        ItemJsonOptions
+                    );
                     var ad = innerItem?.Ad;
                     var landscapeUrl = ad?.LandscapeImage?.Asset;
                     var portraitUrl = ad?.PortraitImage?.Asset;
@@ -273,6 +287,15 @@ public class SpotlightCacheService
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+            if (newImageData.Count == 0)
+            {
+                _logger.LogWarning(
+                    "No usable Spotlight images received. Keeping the existing cache."
+                );
+                return;
+            }
+
             await _cacheLock.WaitAsync(cancellationToken);
             try
             {
@@ -333,11 +356,24 @@ public class SpotlightCacheService
 
         try
         {
-            using var image = await Image.LoadAsync(inputPath, cancellationToken);
-
-            var encoder = new JpegEncoder { Quality = _compressionQuality };
-
-            await image.SaveAsJpegAsync(outputPath, encoder, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var image =
+                SKBitmap.Decode(inputPath)
+                ?? throw new InvalidDataException("Unable to decode the Spotlight image.");
+            using var encoded =
+                image.Encode(SKEncodedImageFormat.Jpeg, _compressionQuality)
+                ?? throw new InvalidDataException("Unable to encode the Spotlight image as JPEG.");
+            cancellationToken.ThrowIfCancellationRequested();
+            using var stream = encoded.AsStream();
+            await using var output = new FileStream(
+                outputPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                useAsync: true
+            );
+            await stream.CopyToAsync(output, cancellationToken);
 
             _logger.LogDebug(
                 "Successfully compressed {Input} to {Output}",
@@ -489,17 +525,18 @@ public class SpotlightCacheService
 
 public class CacheUpdateService : BackgroundService
 {
-    private readonly IServiceProvider _serviceProvider;
+    private readonly SpotlightCacheService _cacheService;
     private readonly ILogger<CacheUpdateService> _logger;
     private readonly TimeSpan _updateInterval;
 
     public CacheUpdateService(
-        IServiceProvider serviceProvider,
+        SpotlightCacheService cacheService,
         IConfiguration configuration,
         ILogger<CacheUpdateService> logger
     )
     {
-        _serviceProvider = serviceProvider;
+        // Resolve and load the disk cache before .NET 10 starts ExecuteAsync on a background thread.
+        _cacheService = cacheService;
         _logger = logger;
         _updateInterval = TimeSpan.FromHours(
             configuration.GetValue<int>("SpotlightSettings:UpdateIntervalHours", 24)
@@ -539,9 +576,7 @@ public class CacheUpdateService : BackgroundService
         _logger.LogInformation("Cache Update Service triggering cache update.");
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var cacheService = scope.ServiceProvider.GetRequiredService<SpotlightCacheService>();
-            await cacheService.FetchAndCacheSpotlightDataAsync(stoppingToken);
+            await _cacheService.FetchAndCacheSpotlightDataAsync(stoppingToken);
         }
         catch (Exception ex)
         {

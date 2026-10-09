@@ -20,16 +20,18 @@ builder.Services.AddCors(options =>
     );
 });
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    app.MapOpenApi();
+    app.MapOpenApi("/swagger/{documentName}/swagger.json");
+    app.UseSwaggerUI(options =>
+        options.SwaggerEndpoint("/openapi/v1.json", "Spotlight Cache Service")
+    );
 }
 
 app.UseHttpsRedirection();
@@ -53,7 +55,7 @@ app.UseStaticFiles(
 
 app.MapGet("/", () => "Spotlight Cache Service is running.")
     .WithName("GetServiceStatus")
-    .WithOpenApi();
+    .WithSummary("Check whether the Spotlight Cache Service is running.");
 
 app.MapGet(
         "/api/spotlight-data",
@@ -85,6 +87,8 @@ app.MapGet(
     .WithName("GetSpotlightData")
     .Produces<List<CachedSpotlightImage>>(StatusCodes.Status200OK)
     .ProducesProblem(StatusCodes.Status500InternalServerError)
-    .WithOpenApi();
+    .WithSummary("Get the latest cached Windows Spotlight images.");
 
 app.Run();
+
+public partial class Program { }

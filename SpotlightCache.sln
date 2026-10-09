@@ -4,6 +4,8 @@ VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpotlightCacheService", "SpotlightCacheService\SpotlightCacheService.csproj", "{190D9F61-7DE0-3A74-6C1E-7A164B90D656}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpotlightCacheService.Tests", "SpotlightCacheService.Tests\SpotlightCacheService.Tests.csproj", "{4ADF8208-EAFA-481E-9F10-13E8BC016E48}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,6 +16,10 @@ Global
 		{190D9F61-7DE0-3A74-6C1E-7A164B90D656}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{190D9F61-7DE0-3A74-6C1E-7A164B90D656}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{190D9F61-7DE0-3A74-6C1E-7A164B90D656}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4ADF8208-EAFA-481E-9F10-13E8BC016E48}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4ADF8208-EAFA-481E-9F10-13E8BC016E48}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4ADF8208-EAFA-481E-9F10-13E8BC016E48}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4ADF8208-EAFA-481E-9F10-13E8BC016E48}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

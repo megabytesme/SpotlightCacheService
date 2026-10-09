@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Downloaded Spotlight images and metadata
+cache/
+
 # User-specific files
 *.rsuser
 *.suo
