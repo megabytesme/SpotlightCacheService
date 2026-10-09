@@ -3,11 +3,11 @@ WORKDIR /src
 
 COPY ["SpotlightCacheService/SpotlightCacheService.csproj", "SpotlightCacheService/"]
 
-RUN dotnet restore "SpotlightCacheService/SpotlightCacheService.csproj" --maxcpucount
+RUN dotnet restore "SpotlightCacheService/SpotlightCacheService.csproj" --use-current-runtime --maxcpucount
 COPY . .
 
 WORKDIR "/src/SpotlightCacheService"
-RUN dotnet publish "SpotlightCacheService.csproj" -c Release -o /app/publish --no-restore --maxcpucount /p:UseAppHost=false
+RUN dotnet publish "SpotlightCacheService.csproj" -c Release -o /app/publish --use-current-runtime --no-self-contained --no-restore --maxcpucount /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
