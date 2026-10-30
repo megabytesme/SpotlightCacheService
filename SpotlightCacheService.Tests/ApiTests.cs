@@ -11,6 +11,21 @@ namespace SpotlightCacheService.Tests;
 
 public class ApiTests
 {
+    [Fact]
+    public async Task EmptyCacheReturnsAnEmptyArrayAndMissingImagesReturn404()
+    {
+        using var cache = new TestCache();
+        using var factory = CreateFactory(cache, "Production");
+        using var client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+
+        using var response = await client.GetAsync("/api/spotlight-data");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+        Assert.Empty(document.RootElement.EnumerateArray());
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/cached-images/missing.jpg")).StatusCode);
+    }
+
     [Theory]
     [InlineData("Development")]
     [InlineData("Production")]

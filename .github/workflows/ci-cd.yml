@@ -1,0 +1,120 @@
+name: SpotlightCache CI and deployment
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: spotlight-tests-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Check out source without persisting credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Install the pinned .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Restore dependencies
+        run: dotnet restore SpotlightCache.sln --disable-parallel
+      - name: Build Release
+        run: dotnet build SpotlightCache.sln --configuration Release --no-restore --verbosity minimal
+      - name: Test real image caching and API contracts with isolated fixtures
+        run: dotnet test SpotlightCacheService.Tests/SpotlightCacheService.Tests.csproj --configuration Release --no-build --no-restore --verbosity minimal
+      - name: Verify x64 and ARM64 Linux publishing
+        run: |
+          for architecture in x64 arm64; do
+            dotnet publish SpotlightCacheService/SpotlightCacheService.csproj \
+              --configuration Release --os linux --arch "$architecture" --no-self-contained \
+              --output "$RUNNER_TEMP/spotlight-publish-$architecture" /p:UseAppHost=false --verbosity minimal
+          done
+
+  deploy:
+    name: Deploy to Oracle
+    needs: test
+    if: >-
+      github.repository == 'megabytesme/SpotlightCacheService' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.PRODUCTION_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    concurrency:
+      group: oracle-spotlight-production
+      cancel-in-progress: false
+    steps:
+      # This fresh job executes no checkout or application build scripts.
+      - name: Deploy the tested commit through restricted SSH
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          ORACLE_DEPLOY_HOST: ${{ vars.ORACLE_DEPLOY_HOST }}
+          ORACLE_DEPLOY_USER: ${{ vars.ORACLE_DEPLOY_USER }}
+          ORACLE_DEPLOY_HOST_KEY: ${{ vars.ORACLE_DEPLOY_HOST_KEY }}
+          ORACLE_DEPLOY_SSH_KEY: ${{ secrets.ORACLE_DEPLOY_SSH_KEY }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('node:fs/promises');
+            const path = require('node:path');
+            const { isIP } = require('node:net');
+            const host = process.env.ORACLE_DEPLOY_HOST || '';
+            const user = process.env.ORACLE_DEPLOY_USER || '';
+            const hostKey = process.env.ORACLE_DEPLOY_HOST_KEY || '';
+            if (!(isIP(host) || /^(?=.{1,253}$)[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*$/.test(host)) ||
+                !/^[a-z_][a-z0-9_-]{0,31}$/.test(user) ||
+                !/^ssh-ed25519 [A-Za-z0-9+/]{68}$/.test(hostKey)) {
+              throw new Error('Configure the deployment host, user and verified Ed25519 host key in repository variables');
+            }
+            if (!/^[0-9a-f]{40}$/.test(context.sha) || !process.env.ORACLE_DEPLOY_SSH_KEY?.trim()) {
+              throw new Error('The commit or dedicated deployment key is missing');
+            }
+            const runId = context.runId;
+            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            if (![runId, runAttempt].every(value => Number.isSafeInteger(value) && value > 0)) {
+              throw new Error('Invalid workflow run identity');
+            }
+            const payload = Buffer.from(JSON.stringify({
+              token: core.getInput('github-token', { required: true }),
+              oidc_token: await core.getIDToken('bytesdirect-oracle-deploy-v1'),
+              run_id: runId, run_attempt: runAttempt
+            }) + '\n');
+            if (payload.length > 16384) throw new Error('Deployment request exceeds the server limit');
+            const directory = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP, 'oracle-deploy-'));
+            try {
+              await fs.writeFile(path.join(directory, 'key'), process.env.ORACLE_DEPLOY_SSH_KEY.trim() + '\n', { mode: 0o600, flag: 'wx' });
+              await fs.writeFile(path.join(directory, 'known_hosts'), `${host} ${hostKey}\n`, { mode: 0o600, flag: 'wx' });
+              await exec.exec('ssh', [
+                '-T', '-F', '/dev/null', '-i', path.join(directory, 'key'),
+                '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+                '-o', 'PasswordAuthentication=no', '-o', 'KbdInteractiveAuthentication=no',
+                '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${path.join(directory, 'known_hosts')}`,
+                '-o', 'GlobalKnownHostsFile=/dev/null', '-o', 'HostKeyAlgorithms=ssh-ed25519',
+                '-o', 'ClearAllForwardings=yes', '-o', 'ForwardAgent=no',
+                '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=6',
+                '-l', user, host, `deploy ${context.sha}`
+              ], { input: payload, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' } });
+            } finally {
+              await fs.rm(directory, { recursive: true, force: true });
+            }
