@@ -1,23 +1,19 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.402@sha256:747cbade5bfd918a175ac32f8f1d931edec2c7d0d5397a3de72eaef1ac1f66d2 AS build
+ARG TARGETARCH
 WORKDIR /src
 
-COPY ["SpotlightCacheService/SpotlightCacheService.csproj", "SpotlightCacheService/"]
-
-RUN dotnet restore "SpotlightCacheService/SpotlightCacheService.csproj" --use-current-runtime --maxcpucount
 COPY . .
+RUN dotnet restore SpotlightCacheService/SpotlightCacheService.csproj -a "$TARGETARCH" \
+    && dotnet publish SpotlightCacheService/SpotlightCacheService.csproj -c Release \
+       -a "$TARGETARCH" --no-restore --no-self-contained -o /out /p:UseAppHost=false \
+    && mkdir -p /out/cache/data /out/cache/images
 
-WORKDIR "/src/SpotlightCacheService"
-RUN dotnet publish "SpotlightCacheService.csproj" -c Release -o /app/publish --use-current-runtime --no-self-contained --no-restore --maxcpucount /p:UseAppHost=false
-
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8
 WORKDIR /app
 
-COPY --from=build /app/publish .
-
-RUN mkdir /app/cache
-RUN mkdir /app/cache/data
-RUN mkdir /app/cache/images
-
+COPY --from=build --chown=1654:1654 /out/ .
+USER 1654:1654
+ENV ASPNETCORE_HTTP_PORTS=8080 DOTNET_EnableDiagnostics=0
 EXPOSE 8080
 
 ENTRYPOINT ["dotnet", "SpotlightCacheService.dll"]
